@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gerador de Notícias • Terra Do Rei</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topo">
+  <div class="caixa topo-dentro">
+    <div class="marca"><span class="marca-icone">📰</span><span class="marca-nome">Gerador de Notícias</span></div>
+    <ol class="etapas">
+      <li class="ativo">Informações</li>
+      <li>Textos</li>
+      <li>PNG</li>
+    </ol>
+  </div>
+</header>
+
+<main class="caixa">
+  <p class="sub">Cole as informações, envie uma imagem e receba o texto do Instagram, o texto jornalístico e o PNG da arte no padrão da capa.</p>
+
+  <form id="form" class="cartao">
+    <div class="linha">
+      <label>ID da notícia <input name="id_noticia" required placeholder="1523" inputmode="numeric"></label>
+      <label>Data <input name="data" placeholder="07/09/2026"></label>
+    </div>
+    <label>Informações / texto da notícia
+      <textarea name="noticia" required placeholder="Cole aqui os fatos, resultados e o crédito da foto (ex.: Foto: Nome)..."></textarea>
+    </label>
+    <div class="linha">
+      <label>Crédito da foto (opcional) <input name="credito" placeholder="Ex.: Futebol Varginha TV"></label>
+      <label>Provedor de texto
+        <select name="provedor">
+          <option value="opencode" selected>OpenCode</option>
+          <option value="ollama">Ollama (local)</option>
+        </select>
+      </label>
+    </div>
+    <label class="arquivo">Imagem (JPG/PNG)
+      <span class="arquivo-caixa">
+        <input type="file" name="imagem" id="imagem" accept=".jpg,.jpeg,.png" required>
+        <span class="arquivo-dica" id="arquivo-dica">Clique para escolher a foto da notícia</span>
+        <img id="miniatura" alt="">
+      </span>
+    </label>
+    <button type="submit" id="btn"><span class="btn-icone">⚡</span> Gerar textos + PNG</button>
+  </form>
+
+  <p id="status" class="status" role="status"></p>
+
+  <section id="saida" hidden>
+    <h2>Textos gerados</h2>
+    <div class="grade">
+      <article class="cartao">
+        <div class="cartao-topo"><h3>📸 Instagram</h3><button type="button" class="copiar" data-alvo="out-insta">Copiar</button></div>
+        <pre id="out-insta"></pre>
+      </article>
+      <article class="cartao">
+        <div class="cartao-topo"><h3>📝 Jornalístico</h3><button type="button" class="copiar" data-alvo="out-jornal">Copiar</button></div>
+        <pre id="out-jornal"></pre>
+      </article>
+    </div>
+
+    <h2>Arte da capa</h2>
+    <div class="arte-grade">
+      <div class="cartao arte-info">
+        <dl>
+          <div><dt>Título</dt><dd id="out-titulo"></dd></div>
+          <div><dt>Subtítulo</dt><dd id="out-subtitulo"></dd></div>
+          <div><dt>Crédito</dt><dd id="out-credito"></dd></div>
+        </dl>
+        <p id="out-arquivos" class="arquivos"></p>
+      </div>
+      <figure class="celular">
+        <img id="out-preview" alt="Prévia do PNG da arte">
+        <figcaption>PNG 1080 × 1350</figcaption>
+      </figure>
+    </div>
+  </section>
+</main>
+
+<footer class="rodape"><div class="caixa">Modelo: capa de notícia • Textos via OpenCode ou Ollama • Arte via Affinity</div></footer>
+
+<script>
+const form = document.getElementById("form");
+const status = document.getElementById("status");
+const etapas = document.querySelectorAll(".etapas li");
+
+document.getElementById("imagem").addEventListener("change", (e) => {
+  const arq = e.target.files[0];
+  const dica = document.getElementById("arquivo-dica");
+  const mini = document.getElementById("miniatura");
+  if (!arq) { dica.textContent = "Clique para escolher a foto da notícia"; mini.removeAttribute("src"); return; }
+  dica.textContent = arq.name;
+  const leitor = new FileReader();
+  leitor.onload = () => mini.src = leitor.result;
+  leitor.readAsDataURL(arq);
+});
+
+document.querySelectorAll(".copiar").forEach((botao) => {
+  botao.addEventListener("click", async () => {
+    const texto = document.getElementById(botao.dataset.alvo).textContent;
+    try { await navigator.clipboard.writeText(texto); botao.textContent = "Copiado!"; }
+    catch { botao.textContent = "Selecione e copie"; }
+    setTimeout(() => botao.textContent = "Copiar", 1500);
+  });
+});
+
+function marcaEtapa(n) {
+  etapas.forEach((li, i) => li.classList.toggle("ativo", i < n));
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById("btn");
+  btn.disabled = true;
+  status.className = "status carregando";
+  marcaEtapa(1);
+  status.textContent = "Gerando textos...";
+  const relogio = setInterval(() => {
+    if (status.textContent.startsWith("Gerando textos")) {
+      status.textContent = "Montando a arte no Affinity (pode levar 1-2 min)...";
+      marcaEtapa(2);
+    }
+  }, 20000);
+  try {
+    const resp = await fetch("/gerar", { method: "POST", body: new FormData(form) });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.error || "Erro desconhecido");
+    document.getElementById("out-insta").textContent = dados.instagram;
+    document.getElementById("out-jornal").textContent = dados.jornalistico;
+    document.getElementById("out-titulo").textContent = dados.titulo_arte;
+    document.getElementById("out-subtitulo").textContent = dados.subtitulo;
+    document.getElementById("out-credito").textContent = dados.credito;
+    if (dados.preview_b64)
+      document.getElementById("out-preview").src = "data:image/jpeg;base64," + dados.preview_b64;
+    document.getElementById("out-arquivos").textContent =
+      "Arquivos: " + Object.values(dados.arquivos).join("  •  ");
+    document.getElementById("saida").hidden = false;
+    marcaEtapa(3);
+    status.className = "status ok";
+    status.textContent = "Pronto! Textos e PNG gerados.";
+    document.getElementById("saida").scrollIntoView({ behavior: "smooth" });
+  } catch (erro) {
+    status.className = "status erro";
+    status.textContent = "Erro: " + erro.message;
+  } finally {
+    clearInterval(relogio);
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
