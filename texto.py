@@ -1,8 +1,8 @@
-"""Geração de textos via Ollama + derivação dos textos da arte.
+"""Geração de textos via OpenCode + derivação dos textos da arte.
 
 Fluxo:
   noticia (texto livre)
-    -> Ollama devolve 3 blocos: [INSTAGRAM], [JORNALISTICO], [ARTE]
+    -> OpenCode devolve 3 blocos: [INSTAGRAM], [JORNALISTICO], [ARTE]
     -> daqui saem os 2 arquivos de texto + TITULO/SUBTITULO/CREDITO da arte.
 """
 import os
@@ -11,13 +11,7 @@ import subprocess
 import tempfile
 import unicodedata
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "gemma4:e2b"
-OLLAMA_CONNECT_TIMEOUT = 10
-OLLAMA_READ_TIMEOUT = 600
-
-# Provedor de texto: "opencode" (padrão, via `opencode run`) ou "ollama".
-PROVEDOR_PADRAO = os.environ.get("GERADOR_PROVEDOR", "opencode")
+# Configurações do OpenCode
 OPENCODE_BIN = os.environ.get("GERADOR_OPENCODE_BIN", "opencode")
 OPENCODE_MODEL = os.environ.get("GERADOR_MODEL", "")  # vazio = modelo padrão do OpenCode
 OPENCODE_TIMEOUT = int(os.environ.get("GERADOR_OPENCODE_TIMEOUT", "300"))
@@ -99,21 +93,6 @@ def extrai_credito_da_noticia(noticia):
     return _limpa_credito(achado.group(1)) if achado else ""
 
 
-def chamar_ollama(noticia):
-    import requests
-
-    resposta = requests.post(
-        OLLAMA_URL,
-        json={"model": MODEL, "prompt": PROMPT_MODELO.format(noticia=noticia), "stream": False},
-        timeout=(OLLAMA_CONNECT_TIMEOUT, OLLAMA_READ_TIMEOUT),
-    )
-    resposta.raise_for_status()
-    corpo = resposta.json()
-    if "response" not in corpo:
-        raise RuntimeError(f"Resposta inesperada do Ollama: {corpo}")
-    return corpo["response"]
-
-
 def chamar_opencode(noticia):
     """Gera os blocos via `opencode run --format json` (sem usar ferramentas)."""
     import json as json_std
@@ -131,13 +110,14 @@ def chamar_opencode(noticia):
             proc = subprocess.run(
                 comando,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 timeout=OPENCODE_TIMEOUT,
                 cwd=vazio,
             )
         except FileNotFoundError:
             raise RuntimeError(f"Executável '{OPENCODE_BIN}' não encontrado no PATH.")
         except subprocess.TimeoutExpired:
-            raise RuntimeError("OpenCode demorou além do limite. Tente de novo.")
+            raise RuntimeError("OpenCode demorou além do limite. Tente novamente.")
     saida = (proc.stdout or b"").decode("utf-8", errors="replace")
     erro = (proc.stderr or b"").decode("utf-8", errors="replace")
     if proc.returncode != 0:
@@ -161,14 +141,6 @@ def chamar_opencode(noticia):
     return resposta
 
 
-def gerar_bruto(noticia, provedor):
-    if provedor == "ollama":
-        return chamar_ollama(noticia)
-    if provedor == "opencode":
-        return chamar_opencode(noticia)
-    raise ValueError(f"Provedor desconhecido: {provedor}. Use 'opencode' ou 'ollama'.")
-
-
 def ensure_instagram_link_and_hashtags(texto):
     conteudo = texto.strip()
     linha_link = f"Saiba mais em: {SITE_URL}"
@@ -188,9 +160,9 @@ def ensure_instagram_link_and_hashtags(texto):
     return f"{corpo}\n\n{linha_link}\n\n{hashtags}".strip()
 
 
-def processar_noticia(noticia, credito_informado="", provedor=PROVEDOR_PADRAO):
+def processar_noticia(noticia, credito_informado=""):
     """Retorna dict com instagram, jornalistico, titulo_arte, subtitulo, credito."""
-    bruto = gerar_bruto(noticia, provedor)
+    bruto = chamar_opencode(noticia)
 
     instagram = _extrai_bloco(bruto, "INSTAGRAM") or "Texto Instagram não identificado"
     jornalistico = _extrai_bloco(bruto, "JORNALISTICO") or "Texto jornalístico não identificado"

@@ -29,15 +29,9 @@
     <label>Informações / texto da notícia
       <textarea name="noticia" required placeholder="Cole aqui os fatos, resultados e o crédito da foto (ex.: Foto: Nome)..."></textarea>
     </label>
-    <div class="linha">
-      <label>Crédito da foto (opcional) <input name="credito" placeholder="Ex.: Futebol Varginha TV"></label>
-      <label>Provedor de texto
-        <select name="provedor">
-          <option value="opencode" selected>OpenCode</option>
-          <option value="ollama">Ollama (local)</option>
-        </select>
-      </label>
-    </div>
+    <label>Crédito da foto (opcional)
+      <input name="credito" placeholder="Ex.: Futebol Varginha TV">
+    </label>
     <label class="arquivo">Imagem (JPG/PNG)
       <span class="arquivo-caixa">
         <input type="file" name="imagem" id="imagem" accept=".jpg,.jpeg,.png" required>
@@ -81,7 +75,7 @@
   </section>
 </main>
 
-<footer class="rodape"><div class="caixa">Modelo: capa de notícia • Textos via OpenCode ou Ollama • Arte via Affinity</div></footer>
+<footer class="rodape"><div class="caixa">Modelo: capa_noticia.psd • Textos via OpenCode • Arte via PhotoCraft</div></footer>
 
 <script>
 const form = document.getElementById("form");
@@ -118,13 +112,13 @@ form.addEventListener("submit", async (e) => {
   btn.disabled = true;
   status.className = "status carregando";
   marcaEtapa(1);
-  status.textContent = "Gerando textos...";
+  status.textContent = "Gerando textos com OpenCode...";
   const relogio = setInterval(() => {
     if (status.textContent.startsWith("Gerando textos")) {
-      status.textContent = "Montando a arte no Affinity (pode levar 1-2 min)...";
+      status.textContent = "Montando a arte no PhotoCraft...";
       marcaEtapa(2);
     }
-  }, 20000);
+  }, 10000);
   try {
     const resp = await fetch("/gerar", { method: "POST", body: new FormData(form) });
     const dados = await resp.json();
@@ -135,7 +129,7 @@ form.addEventListener("submit", async (e) => {
     document.getElementById("out-subtitulo").textContent = dados.subtitulo;
     document.getElementById("out-credito").textContent = dados.credito;
     if (dados.preview_b64)
-      document.getElementById("out-preview").src = "data:image/jpeg;base64," + dados.preview_b64;
+      document.getElementById("out-preview").src = "data:image/png;base64," + dados.preview_b64;
     document.getElementById("out-arquivos").textContent =
       "Arquivos: " + Object.values(dados.arquivos).join("  •  ");
     document.getElementById("saida").hidden = false;

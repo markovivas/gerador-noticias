@@ -1,13 +1,12 @@
-"""Gerador de Notícias: texto (Instagram + jornalístico) + PNG via Affinity.
+"""Gerador de Notícias: texto (Instagram + jornalístico) via OpenCode + PNG via PhotoCraft.
 
 Entrada: informações/texto + uma imagem.
-Saída: arquivo Instagram (.md), arquivo jornalístico (.md) e PNG da arte.
+Saída: arquivo Instagram (.md), arquivo jornalístico (.md), projeto (.psd) e PNG da arte.
 """
 from datetime import date
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
-from werkzeug.utils import secure_filename
 
 import arte
 import texto
@@ -16,7 +15,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024  # 20 MB
 
 BASE = Path(app.root_path)  # tudo vive dentro de gerador-noticias/
-MODELO = BASE / "modelos" / "capa_noticia.af"
+MODELO = BASE / "modelos" / "capa_noticia.psd"
 DIR_IMAGENS = BASE / "imagens"
 DIR_PROJETOS = BASE / "projetos"
 DIR_EXPORTS = BASE / "exports"
@@ -35,7 +34,6 @@ def gerar():
     id_noticia = (request.form.get("id_noticia") or "").strip()
     data_br = (request.form.get("data") or "").strip() or date.today().strftime("%d/%m/%Y")
     credito = (request.form.get("credito") or "").strip()
-    provedor = (request.form.get("provedor") or texto.PROVEDOR_PADRAO).strip()
     arquivo = request.files.get("imagem")
 
     if not noticia:
@@ -52,20 +50,20 @@ def gerar():
     if extensao not in EXTENSOES_IMAGEM:
         return jsonify({"error": "Imagem deve ser JPG ou PNG."}), 400
     if not MODELO.exists():
-        return jsonify({"error": f"Modelo não encontrado: {MODELO}"}), 500
+        return jsonify({"error": f"Modelo PSD não encontrado: {MODELO}"}), 500
 
     # 1. Imagem: salva uma cópia nova em imagens/ (originais nunca são alteradas).
     DIR_IMAGENS.mkdir(parents=True, exist_ok=True)
     caminho_imagem = DIR_IMAGENS / f"{base}{extensao}"
     arquivo.save(caminho_imagem)
 
-    # 2. Textos via provedor configurado (OpenCode ou Ollama).
+    # 2. Textos via OpenCode.
     try:
-        conteudo = texto.processar_noticia(noticia, credito, provedor)
+        conteudo = texto.processar_noticia(noticia, credito)
     except Exception as erro:
-        return jsonify({"error": f"Falha no provedor '{provedor}': {erro}"}), 502
+        return jsonify({"error": f"Falha na geração de texto com OpenCode: {erro}"}), 502
 
-    # 3. Arquivos de texto.
+    # 3. Arquivos de texto (.md).
     DIR_NOTICIAS.mkdir(exist_ok=True)
     slug = texto.nome_base_unico(DIR_NOTICIAS, texto.slugify_text(conteudo["titulo_arte"] or base))
     arq_insta = DIR_NOTICIAS / f"{slug}_instagram.md"
@@ -81,15 +79,21 @@ def gerar():
         encoding="utf-8",
     )
 
-    # 4. Arte no Affinity (pode levar 1-2 min).
+    # 4. Arte no PhotoCraft (edição de camadas + exportação PNG).
     try:
         resultado_arte = arte.gerar_arte(
-            MODELO, DIR_PROJETOS, DIR_EXPORTS, caminho_imagem,
-            id_noticia, data_br,
-            conteudo["titulo_arte"], conteudo["subtitulo"], conteudo["credito"],
+            MODELO,
+            DIR_PROJETOS,
+            DIR_EXPORTS,
+            caminho_imagem,
+            id_noticia,
+            data_br,
+            conteudo["titulo_arte"],
+            conteudo["subtitulo"],
+            conteudo["credito"],
         )
     except Exception as erro:
-        return jsonify({"error": f"Falha na arte: {erro}"}), 500
+        return jsonify({"error": f"Falha na arte via PhotoCraft: {erro}"}), 500
 
     return jsonify({
         "instagram": conteudo["instagram"],
@@ -97,12 +101,11 @@ def gerar():
         "titulo_arte": conteudo["titulo_arte"],
         "subtitulo": conteudo["subtitulo"],
         "credito": conteudo["credito"],
-        "provedor": provedor,
         "preview_b64": resultado_arte["preview_b64"],
         "arquivos": {
             "instagram_md": arq_insta.name,
             "jornalistico_md": arq_jornal.name,
-            "projeto_af": Path(resultado_arte["projeto"]).name,
+            "projeto_psd": Path(resultado_arte["projeto"]).name,
             "png": Path(resultado_arte["png"]).name,
         },
     })

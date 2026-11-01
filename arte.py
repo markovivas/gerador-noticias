@@ -1,144 +1,139 @@
-"""Orquestra a arte no Affinity: copia o modelo, edita, salva e exporta o PNG."""
+"""Orquestra a arte no PhotoCraft: edita o modelo PSD, salva o projeto e exporta o PNG."""
+import base64
 import json
-import re
-import shutil
+import os
+import subprocess
 from pathlib import Path
 
-from mcp_affinity import AffinityMCPClient
-
-CAMADAS_TEXTO = ("TITULO", "SUB-TITULO", "DONO NA IMAGEM")
+PHOTOCRAFT_BIN = os.environ.get(
+    "PHOTOCRAFT_BIN",
+    r"C:\Program Files\ArtCraft\PhotoCraft\photocraft-cli.exe",
+)
 
 
 def nome_base(id_noticia, data_br):
     """'1523', '07/09/2026' -> 'noticia-1523-07-09-2026'."""
-    dia, mes, ano = [p.zfill(2) for p in data_br.strip().split("/")]
+    partes = data_br.strip().split("/")
+    if len(partes) != 3:
+        raise ValueError("Data deve estar no formato DD/MM/AAAA")
+    dia, mes, ano = [p.zfill(2) for p in partes]
     return f"noticia-{id_noticia.strip()}-{dia}-{mes}-{ano}"
 
 
-def preparar_projeto(caminho_modelo, dir_projetos, base):
-    """Copia o modelo sem alterá-lo. Retorna o caminho da cópia."""
-    dir_projetos.mkdir(parents=True, exist_ok=True)
-    antes = caminho_modelo.stat()
-    destino = dir_projetos / f"{base}.af"
-    if destino.exists():
-        destino.unlink()  # recomeça do modelo limpo a cada geração
-    shutil.copy2(caminho_modelo, destino)
-    depois = caminho_modelo.stat()
-    assert (antes.st_size, antes.st_mtime) == (depois.st_size, depois.st_mtime), \
-        "Modelo original foi tocado na cópia"
-    return destino
+def verificar_photocraft():
+    """Valida se o executável do PhotoCraft CLI existe."""
+    caminho = Path(PHOTOCRAFT_BIN)
+    if not caminho.is_file():
+        raise RuntimeError(
+            f"PhotoCraft CLI não encontrado em '{PHOTOCRAFT_BIN}'. "
+            "Verifique a instalação ou configure a variável PHOTOCRAFT_BIN."
+        )
+    return caminho
 
 
-def montar_js(caminho_projeto, caminho_imagem, caminho_png, titulo, subtitulo, credito):
-    """Monta o script executado dentro do Affinity (etapas com log)."""
-    p = lambda valor: json.dumps(str(valor))
-    return f"""
-const {{ Document, FileExportOptions, FileExportArea }} = require('/document');
-const {{ Selection, TextSelection }} = require('/selections');
-const {{ DocumentCommand, AddChildNodesCommandBuilder }} = require('/commands');
-const {{ ImageNodeDefinition }} = require('/nodes');
-const {{ Bitmap }} = require('/rasterobject');
-const {{ RasterFormat }} = require('affinity:raster');
-const {{ NodeChildType, NodeMoveType }} = require('affinity:dom');
-const {{ Transform }} = require('/geometry');
-const {{ EnumerationResult }} = require('affinity:common');
+def gerar_arte(
+    caminho_modelo: Path,
+    dir_projetos: Path,
+    dir_exports: Path,
+    caminho_imagem: Path,
+    id_noticia: str,
+    data_br: str,
+    titulo: str,
+    subtitulo: str,
+    credito: str,
+):
+    """Executa a substituição das camadas no PhotoCraft e exporta o PNG.
 
-const doc = Document.load({p(str(caminho_projeto))});
-console.log("UUID=" + doc.sessionUuid);
-console.log("ETAPA=carregado wPx=" + doc.widthPixels + " hPx=" + doc.heightPixels);
+    Camadas editadas no PSD:
+      - FOTO: Substituição do conteúdo do Smart Object pela nova imagem.
+      - TITULO: Atualização da camada de texto do título.
+      - SUB-TITULO: Atualização da camada de texto do subtítulo.
+      - CREDITO: Atualização da camada de texto do crédito da foto.
+    """
+    bin_pc = verificar_photocraft()
 
-function findByDesc(desc) {{
-  for (const l of doc.layers.all) {{
-    try {{ if (l.descriptionInterface && l.descriptionInterface.userDescription === desc) return l; }} catch(_){{}}
-  }}
-  return null;
-}}
-function setAllText(desc, txt) {{
-  const node = findByDesc(desc);
-  if (!node) throw new Error("Camada ausente: " + desc);
-  const range = node.storyInterface.storyRange;
-  const sel = Selection.create(doc, node);
-  sel.addSubSelectionForNode(node, TextSelection.create([{{begin: range.begin, end: range.end}}]));
-  doc.executeCommand(DocumentCommand.createSetText(sel, txt));
-  console.log("ETAPA=texto " + desc);
-}}
-setAllText("TITULO", {p(titulo)});
-setAllText("SUB-TITULO", {p(subtitulo)});
-setAllText("DONO NA IMAGEM", {p(credito)});
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(f"Arquivo de modelo não encontrado: {caminho_modelo}")
+    if not caminho_imagem.exists():
+        raise FileNotFoundError(f"Arquivo de imagem não encontrado: {caminho_imagem}")
 
-const foto = findByDesc("FOTO");
-if (!foto) throw new Error("Camada FOTO ausente");
-const caixa = foto.spreadVisibleBox;
-const bm = Bitmap.loadFromFile({p(str(caminho_imagem))});
-console.log("ETAPA=bitmap " + bm.width + "x" + bm.height);
-const def = ImageNodeDefinition.create(RasterFormat.RGBA8);
-def.bitmap = bm;
-def.userDescription = "FOTO_NOVA";
-const builder = AddChildNodesCommandBuilder.create();
-builder.addImageNode(def);
-builder.setInsertionTarget(foto.parent);
-doc.executeCommand(builder.createCommand(false, NodeChildType.Main));
-let nova = findByDesc("FOTO_NOVA");
-if (!nova) throw new Error("Falha ao inserir imagem");
-// Cobertura proporcional: preenche a caixa sem deformar.
-const s = Math.max(caixa.width / bm.width, caixa.height / bm.height);
-const tx = (caixa.x + caixa.width / 2) - (bm.width * s) / 2;
-const ty = (caixa.y + caixa.height / 2) - (bm.height * s) / 2;
-const xf = new Transform();
-xf.data["0"] = s; xf.data["1"] = 0; xf.data["2"] = tx;
-xf.data["3"] = 0; xf.data["4"] = s; xf.data["5"] = ty;
-doc.executeCommand(DocumentCommand.createTransform(Selection.create(doc, nova), xf));
-console.log("ETAPA=foto-posicionada");
-// Gradiente de volta para cima da foto (ordem original).
-let grad = null;
-for (const l of doc.layers.all) {{
-  try {{ if (l.descriptionInterface && l.descriptionInterface.userDescription === "Gradient Fill 1") grad = l; }} catch(_){{}}
-}}
-if (!grad) throw new Error("Gradient Fill 1 ausente");
-doc.executeCommand(DocumentCommand.createMoveNodes(
-  Selection.create(doc, nova), grad, NodeMoveType.Before, NodeChildType.Main));
-doc.selection = Selection.create(doc, foto);
-doc.executeCommand(DocumentCommand.createDeleteSelection(doc.selection));
-nova.userDescription = "FOTO";
-console.log("ETAPA=foto-trocada");
-
-doc.save();
-console.log("ETAPA=salvo " + doc.path);
-const opts = FileExportOptions.createWithPresetName("PNG");
-const area = FileExportArea.createForWholeDocument();
-const rec = doc.export({p(str(caminho_png))}, opts, area, null);
-rec.enumerate(r => {{ console.log("ETAPA=export success=" + r.isSuccess); return EnumerationResult.Continue; }});
-console.log("FINAL DONE wPx=" + doc.widthPixels + " hPx=" + doc.heightPixels);
-"""
-
-
-def gerar_arte(caminho_modelo, dir_projetos, dir_exports, caminho_imagem,
-               id_noticia, data_br, titulo, subtitulo, credito):
-    """Executa o fluxo completo e retorna dict com log, uuid, png e preview."""
     base = nome_base(id_noticia, data_br)
-    projeto = preparar_projeto(caminho_modelo, dir_projetos, base)
-    png = dir_exports / f"{base}.png"
+    dir_projetos.mkdir(parents=True, exist_ok=True)
     dir_exports.mkdir(parents=True, exist_ok=True)
 
-    js = montar_js(projeto, caminho_imagem, png, titulo, subtitulo, credito)
-    cliente = AffinityMCPClient()
-    try:
-        log = cliente.executar_js(js, timeout=240)
-    finally:
-        cliente.fechar()
+    projeto_psd = dir_projetos / f"{base}.psd"
+    export_png = dir_exports / f"{base}.png"
 
-    achado = re.search(r"UUID=([A-F0-9\-]+)", log)
-    uuid = achado.group(1) if achado else ""
-    if "FINAL DONE" not in log or not png.exists():
-        raise RuntimeError(f"Falha na arte. Log:\n{log}")
+    # Se já existirem versões anteriores desse ID/data, remove para recriar limpo
+    if projeto_psd.exists():
+        projeto_psd.unlink()
+    if export_png.exists():
+        export_png.unlink()
 
-    cliente2 = AffinityMCPClient()
+    # 1. Edição do modelo no PhotoCraft: troca a foto e os textos
+    cmd_run = [
+        str(bin_pc),
+        "run",
+        str(caminho_modelo.resolve()),
+        "--cmd", "layer.select", "--params", json.dumps({"name": "FOTO"}),
+        "--cmd", "layer.smartObjects.replaceContents", "--params", json.dumps({"path": str(caminho_imagem.resolve())}),
+        "--cmd", "layer.select", "--params", json.dumps({"name": "TITULO"}),
+        "--cmd", "type.edit", "--params", json.dumps({"text": titulo}),
+        "--cmd", "layer.select", "--params", json.dumps({"name": "SUB-TITULO"}),
+        "--cmd", "type.edit", "--params", json.dumps({"text": subtitulo}),
+        "--cmd", "layer.select", "--params", json.dumps({"name": "CREDITO"}),
+        "--cmd", "type.edit", "--params", json.dumps({"text": credito}),
+        "--out", str(projeto_psd.resolve()),
+    ]
+
+    proc_run = subprocess.run(
+        cmd_run,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=120,
+    )
+
+    log = f"[PHOTOCRAFT RUN STDOUT]\n{proc_run.stdout}\n[PHOTOCRAFT RUN STDERR]\n{proc_run.stderr}\n"
+
+    if proc_run.returncode != 0 or not projeto_psd.exists():
+        raise RuntimeError(
+            f"Falha ao gerar o arquivo PSD no PhotoCraft (código {proc_run.returncode}):\n{proc_run.stderr or proc_run.stdout}"
+        )
+
+    # 2. Conversão direta do PSD para PNG 1080x1350
+    cmd_conv = [
+        str(bin_pc),
+        "convert",
+        str(projeto_psd.resolve()),
+        str(export_png.resolve()),
+    ]
+
+    proc_conv = subprocess.run(
+        cmd_conv,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
+    )
+
+    log += f"[PHOTOCRAFT CONVERT STDOUT]\n{proc_conv.stdout}\n[PHOTOCRAFT CONVERT STDERR]\n{proc_conv.stderr}\n"
+
+    if proc_conv.returncode != 0 or not export_png.exists():
+        raise RuntimeError(
+            f"Falha ao exportar PNG no PhotoCraft (código {proc_conv.returncode}):\n{proc_conv.stderr or proc_conv.stdout}"
+        )
+
+    # 3. Gera prévia em base64 a partir do PNG gerado
     try:
-        preview_b64 = cliente2.renderizar_spread(uuid, 0) if uuid else ""
+        preview_b64 = base64.b64encode(export_png.read_bytes()).decode("ascii")
     except Exception:
         preview_b64 = ""
-    finally:
-        cliente2.fechar()
 
-    return {"base": base, "projeto": str(projeto), "png": str(png),
-            "uuid": uuid, "log": log, "preview_b64": preview_b64}
+    return {
+        "base": base,
+        "projeto": str(projeto_psd),
+        "png": str(export_png),
+        "preview_b64": preview_b64,
+        "log": log,
+    }

@@ -1,31 +1,40 @@
 # Gerador de Notícias
 
-Sistema novo e autocontido — tudo vive nesta pasta. O modelo
-`modelos\capa_noticia.af` é lido como base e nunca alterado.
+Sistema autocontido para geração de notícias jornalísticas, publicações para Instagram e artes para capas.
+Usa exclusivamente **OpenCode** para redação e **PhotoCraft** para edição e exportação das artes gráficas.
 
-**Entrada:** informações/texto + uma imagem (JPG/PNG).
-**Saída:** arquivo Instagram (`.md`), arquivo jornalístico (`.md`) e PNG da arte.
+O modelo base oficial é `modelos\capa_noticia.psd` (mantido sempre intacto).
+
+**Entrada:** informações/texto da notícia + uma imagem (JPG/PNG).  
+**Saída:** arquivo Instagram (`.md`), arquivo jornalístico (`.md`), arquivo do projeto (`.psd`) e arte final (`.png`, 1080×1350).
+
+---
 
 ## Como funciona
 
-1. O usuário preenche ID, data, texto, crédito (opcional) e anexa a imagem em `GET /`.
-2. `POST /gerar` executa, nesta ordem:
-   - salva uma cópia nova da imagem em `imagens\` (originais nunca mudam);
-   - chama o provedor de texto (`texto.py`) que devolve 3 blocos: `[INSTAGRAM]`, `[JORNALISTICO]` e `[ARTE]` (título ≤ 3 palavras, subtítulo ≤ 18, crédito);
-   - grava `noticias\<slug>_instagram.md` e `noticias\<slug>_jornalistico.md`;
-   - copia o modelo para `projetos\noticia-ID-DD-MM-AAAA.af` e edita **só** `TITULO`, `SUB-TITULO`, `DONO NA IMAGEM` e `FOTO` via MCP do Affinity (`arte.py` + `mcp_affinity.py`);
-   - salva o `.af` e exporta `exports\noticia-ID-DD-MM-AAAA.png` (1080×1350, qualidade máxima).
-3. A resposta traz os textos, os nomes dos arquivos e uma prévia do PNG.
+1. O usuário preenche o ID, data, texto da notícia, crédito da foto (opcional) e anexa a imagem em `GET /`.
+2. `POST /gerar` executa de forma rápida e automatizada:
+   - Salva uma cópia da foto enviada em `imagens\` (a foto original nunca é alterada);
+   - Chama o **OpenCode** (`texto.py`) que devolve 3 blocos estruturados: `[INSTAGRAM]`, `[JORNALISTICO]` e `[ARTE]` (título ≤ 3 palavras, subtítulo ≤ 18 palavras, crédito);
+   - Grava os arquivos `noticias\<slug>_instagram.md` e `noticias\<slug>_jornalistico.md`;
+   - Executa o **PhotoCraft CLI** (`arte.py`) headlessly para editar o modelo PSD:
+     - Camada `FOTO` (substituição do Smart Object pela foto enviada, preservando proporção, máscara e degradê);
+     - Camada `TITULO` (edição do texto do título);
+     - Camada `SUB-TITULO` (edição do texto do subtítulo);
+     - Camada `CREDITO` (edição do texto do autor/divulgação da foto);
+   - Salva o projeto em `projetos\noticia-ID-DD-MM-AAAA.psd`;
+   - Converte e exporta `exports\noticia-ID-DD-MM-AAAA.png` (1080×1350);
+3. A resposta JSON devolve os textos, nomes dos arquivos gerados e prévia imediata do PNG.
+
+---
 
 ## Requisitos
 
 - Python 3.10+, `pip install -r requirements.txt`
-- Um provedor de texto (escolhido no formulário):
-  - **OpenCode** (padrão): CLI `opencode` no PATH, autenticado; usa `opencode run --format json`
-    sem ferramentas, num diretório temporário vazio. Modelo padrão do OpenCode ou
-    `GERADOR_MODEL=provedor/modelo`.
-  - **Ollama**: rodando em `http://localhost:11434` com o modelo de `texto.py` (`gemma4:e2b`).
-- Affinity aberto com o MCP habilitado (`http://[::1]:6767/sse`)
+- **OpenCode**: CLI `opencode` instalado e no PATH do sistema.
+- **PhotoCraft**: Instalado no caminho padrão (`C:\Program Files\ArtCraft\PhotoCraft\photocraft-cli.exe`) ou configurado pela variável de ambiente `PHOTOCRAFT_BIN`.
+
+---
 
 ## Como executar
 
@@ -33,28 +42,32 @@ Sistema novo e autocontido — tudo vive nesta pasta. O modelo
 python app.py
 ```
 
-Abrir `http://127.0.0.1:5000`. A geração do PNG pode levar 1–2 min.
+Acesse `http://127.0.0.1:5000` no navegador. A geração completa leva apenas alguns segundos!
 
-## Estrutura
+---
+
+## Estrutura do projeto
 
 ```text
 gerador-noticias/
-|-- app.py            # Flask: formulário + POST /gerar
-|-- texto.py          # provedores (OpenCode/Ollama), parsing, regras de título/subtítulo/crédito
-|-- arte.py           # copia o modelo, monta o JS e orquestra save/export
-|-- mcp_affinity.py   # cliente MCP (stdlib, sem dependências extras)
-|-- modelos/capa_noticia.af  # base somente-leitura
-|-- docs/             # prompt-padrao.md + noticia-exemplo.txt (referência)
-|-- imagens/          # fotos enviadas
-|-- projetos/         # .af de trabalho
-|-- exports/          # PNG finais
-|-- templates/index.html
-|-- static/style.css
-|-- noticias/         # .md gerados
+|-- app.py                   # Servidor Flask (API e rotas)
+|-- texto.py                 # Integração com OpenCode, prompt e regras jornalísticas
+|-- arte.py                  # Orquestração do PhotoCraft CLI (edição de camadas e exportação PNG)
+|-- modelos/
+|   |-- capa_noticia.psd     # Modelo oficial em PSD (somente-leitura)
+|-- imagens/                 # Fotos enviadas pelo usuário
+|-- projetos/                # Projetos de trabalho (.psd) gerados
+|-- exports/                 # Artes finais exportadas (.png 1080x1350)
+|-- noticias/                # Arquivos de texto (.md) gerados
+|-- templates/index.html     # Interface web do usuário
+|-- static/style.css         # Folha de estilo da aplicação
+|-- requirements.txt         # Dependências Python
 ```
 
-## Regras preservadas do padrão
+---
 
-- Modelo original intacto (tamanho/data verificados na cópia).
-- Foto incorporada (não vinculada), cobertura proporcional sem deformar, máscara/gradiente/posição e ordem das camadas preservadas.
-- Textos derivados só do conteúdo informado; crédito cai para "Divulgação" quando ausente.
+## Regras de design preservadas
+
+- O arquivo base `modelos\capa_noticia.psd` nunca é modificado diretamente.
+- A camada `FOTO` utiliza Smart Object para manter a posição, máscara de recorte e o degradê superior (`Gradient Fill 1`).
+- Os textos da arte respeitam as limitações de espaço da capa: título de até 3 palavras e subtítulo de até 18 palavras.
